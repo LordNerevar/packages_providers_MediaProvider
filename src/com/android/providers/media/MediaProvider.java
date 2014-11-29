@@ -60,6 +60,7 @@ import android.net.Uri;
 import android.os.Binder;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.FileUtils;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Message;
@@ -67,6 +68,7 @@ import android.os.ParcelFileDescriptor;
 import android.os.Process;
 import android.os.RemoteException;
 import android.os.SystemClock;
+import android.os.SystemProperties;
 import android.os.storage.StorageManager;
 import android.os.storage.StorageVolume;
 import android.preference.PreferenceManager;
@@ -105,6 +107,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.PriorityQueue;
+import java.util.regex.Pattern;
 import java.util.Stack;
 
 /**
@@ -252,6 +255,12 @@ public class MediaProvider extends ContentProvider {
                     // If secondary external storage is ejected, then we delete all database
                     // entries for that storage from the files table.
                     synchronized (mDatabases) {
+                        // Don't delete entries if the eject is due to a shutdown
+                        if (!"".equals(SystemProperties.get("sys.shutdown.requested"))) {
+                            Log.d(TAG, "not deleting entries on eject due to shtudown");
+                            return;
+                        }
+
                         DatabaseHelper database = mDatabases.get(EXTERNAL_VOLUME);
                         Uri uri = Uri.parse("file://" + storage.getPath());
                         if (database != null) {
@@ -335,6 +344,9 @@ public class MediaProvider extends ContentProvider {
      * on demand, create and upgrade the schema, etc.
      */
     static final class DatabaseHelper extends SQLiteOpenHelper {
+        // Matches SQLite database temporary files.
+        private static final Pattern DB_TMPFILE_PAT = Pattern.compile("\\.db-\\w+\\z");
+
         final Context mContext;
         final String mName;
         final boolean mInternal;  // True if this is the internal database
@@ -439,6 +451,13 @@ public class MediaProvider extends ContentProvider {
             // delete external databases that have not been used in the past two months
             long twoMonthsAgo = now - OBSOLETE_DATABASE_DB;
             for (int i = 0; i < databases.length; i++) {
+                // Remove SQLite temporary files as they don't count as distinct databases.
+                if (DB_TMPFILE_PAT.matcher(databases[i]).find()) {
+                    databases[i] = null;
+                    count--;
+                    continue;
+                }
+
                 File other = mContext.getDatabasePath(databases[i]);
                 if (INTERNAL_DATABASE_NAME.equals(databases[i]) || file.equals(other)) {
                     databases[i] = null;
